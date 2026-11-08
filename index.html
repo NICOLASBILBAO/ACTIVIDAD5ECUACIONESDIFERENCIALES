@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Simulador: EDP aplicadas a la SST</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+/* Paleta: azul institucional (dominante), verde=éxito, dorado=acento, negro=texto, blanco=tarjetas, rojo=solo error */
+:root{--az:#0B3D91;--az2:#082C69;--ve:#1B7F3B;--or:#F2B705;--ng:#1A1A1A;--bl:#fff;--ro:#C62828;--bg:#EAF0FA}
+*{box-sizing:border-box}body{margin:0;font-family:'Source Sans 3',sans-serif;color:var(--ng);background:var(--bg)}
+h1,h2,h3{font-family:'Barlow Condensed',sans-serif;margin:.2em 0}
+header{background:var(--az);color:#fff;padding:10px 18px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;border-bottom:4px solid var(--or)}
+.card{background:var(--bl);border-radius:12px;padding:18px;margin:14px auto;max-width:1100px;box-shadow:0 2px 10px #0003}
+.grid{display:grid;grid-template-columns:1.2fr 1fr;gap:18px}@media(max-width:800px){.grid{grid-template-columns:1fr}}
+#fig{height:320px;border-radius:10px;background:radial-gradient(#1b4fb5,#071a3d);display:flex;align-items:center;justify-content:center;overflow:hidden}
+#fig canvas{width:100%;height:100%}
+button{background:var(--az);color:#fff;border:0;border-radius:8px;padding:9px 16px;font:600 15px 'Source Sans 3';cursor:pointer;margin:3px}
+button:hover:not(:disabled){background:var(--or);color:var(--ng)}button:disabled{opacity:.4;cursor:not-allowed}
+button.alt{background:#fff;color:var(--az);border:2px solid var(--az)}
+input[type=text],input[type=number]{padding:9px;border:2px solid var(--az);border-radius:8px;font-size:16px;width:100%;max-width:340px}
+.opt{display:block;margin:6px 0;padding:8px;border:2px solid #cfd8ea;border-radius:8px;cursor:pointer}.opt:has(input:checked){border-color:var(--az);background:#eef3ff}
+.fb{margin-top:10px;padding:10px;border-radius:8px;display:none}.ok{background:#e3f4e8;border-left:5px solid var(--ve);display:block}.bad{background:#fdeaea;border-left:5px solid var(--ro);display:block}
+.hint{background:#fff6d6;border-left:5px solid var(--or);padding:8px;margin-top:8px;display:none}
+#sub{min-height:22px;font-style:italic;background:#f3f3f3;padding:6px 10px;border-radius:6px;margin-top:8px}
+.bar{height:8px;background:#dbe3f3;border-radius:5px}.bar i{display:block;height:100%;background:var(--or);border-radius:5px}
+.cover{text-align:center}.cover h1{font-size:2.3em;color:var(--az)}
+table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #ddd;padding:6px;text-align:left}
+.k{background:#fff;color:var(--az);border:2px solid var(--az);padding:5px 10px;margin:2px;min-width:36px}
+#wk{width:100%;min-height:170px;font:17px 'Source Sans 3',monospace;padding:10px;border:2px solid var(--az);border-radius:8px}
+.ins{background:#eef3ff;border-left:5px solid var(--az);padding:8px 12px;border-radius:6px;margin:8px 0}
+.proc{background:#f0faf3;border-left:5px solid var(--ve);padding:8px 12px 8px 28px;margin-top:8px;display:none}
+.ico{display:inline-block;font-size:1.4em;animation:fl 2s ease-in-out infinite}@keyframes fl{50%{transform:translateY(-6px)}}
+.ill{font-size:2.4em;display:flex;justify-content:center;gap:18px;margin:10px 0}.ill span{animation:fl 2.4s ease-in-out infinite}.ill span:nth-child(2n){animation-delay:.5s}.ill span:nth-child(3n){animation-delay:1s}
+.meta{display:inline-block;background:var(--az);color:#fff;border-radius:8px;padding:6px 14px;margin:4px;font-weight:600;border-bottom:3px solid var(--or)}
+</style></head><body>
+<div id="app"></div><div hidden><canvas id="cv"></canvas></div>
+<script>
+'use strict';
+/* ===== DATOS (fuente: Taller de EDP aplicadas a SST – Colombia, Res. 0312/2019 y Ley 1562/2012) =====
+ SUPUESTO: el PDF tiene 10 ejercicios con respuesta numérica salvo el 2 y el 9 → se modelan 8 numéricos y 2 de opción múltiple (la clave sale del procedimiento del PDF).
+ SUPUESTO: el PDF no define tolerancias → se fija una por ejercicio (campo tol) acorde al redondeo del PDF.
+ SUPUESTO: el PDF no define ponderación → 10 puntos por ejercicio (100/10).
+ SUPUESTO: la sección 6 pide "16-17 escenas" pero lista 10+bienvenida+cierre → se implementan 12 escenas 3D (una por ejercicio + bienvenida + cierre).
+ SUPUESTO: las traducciones al inglés son propias y mantienen el sentido del PDF. */
+const EX=[
+{t:"Verificación del modelo de enfriamiento de la pared de un horno",k:'slab',type:'num',unit:'°C/s',ans:-0.0284,tol:0.001,
+ es:"Una placa de acero de espesor L = 0,5 m (identificación de peligros térmicos, Res. 0312/2019) se modela con T(x,t) = 25 + 60·e^(−αk²t)·sin(kx), k = π/L, α = 1,2×10^-5 m²/s, que cumple T_t = α·T_xx. Calcule la tasa de enfriamiento T_t en x = 0,25 m y t = 0 (en °C/s).",
+ en:"A steel plate of thickness L = 0.5 m (thermal hazard identification, Res. 0312/2019) follows T(x,t) = 25 + 60·e^(−αk²t)·sin(kx), k = π/L, α = 1.2×10^-5 m²/s, which satisfies T_t = α·T_xx. Compute the cooling rate T_t at x = 0.25 m and t = 0 (in °C/s).",
+ h:"En x = 0,25 m, sin(kx) = 1. Calcule αk² con k = 2π y multiplique por −60.",he:"At x = 0.25 m, sin(kx) = 1. Compute αk² with k = 2π and multiply by −60.",
+ x:"T_t = −αk²·60 = −4,737×10^-4 × 60 = −0,0284 °C/s (≈ −1,70 °C/min). La superficie sigue siendo un peligro de contacto por bastante tiempo.",xe:"T_t = −αk²·60 = −0.0284 °C/s (≈ −1.70 °C/min). The surface remains a contact hazard for a long time."},
+{t:"Clasificación del modelo de dispersión de un contaminante",k:'flow',type:'mc',ans:1,
+ opts:["Elíptica, Pe = 0,1","Parabólica, Pe = 100","Hiperbólica, Pe = 100","Parabólica, Pe = 0,01"],
+ es:"El vapor de un solvente en un corredor ventilado sigue C_t + v·C_x = D·C_xx con v = 0,5 m/s, D = 0,05 m²/s y L = 10 m. Mediante B² − 4AC y el número de Péclet Pe = vL/D, ¿cuál es la clasificación correcta?",
+ en:"A solvent vapor in a ventilated corridor follows C_t + v·C_x = D·C_xx with v = 0.5 m/s, D = 0.05 m²/s and L = 10 m. Using B² − 4AC and the Péclet number Pe = vL/D, which classification is correct?",
+ h:"Aquí A = D, B = 0 y C = 0, así que B² − 4AC = 0. Pe = 0,5·10/0,05.",he:"Here A = D, B = 0 and C = 0, so B² − 4AC = 0. Pe = 0.5·10/0.05.",
+ x:"B² − 4AC = 0 → parabólica; Pe = 100 ≫ 1: transporte dominado por advección.",xe:"B² − 4AC = 0 → parabolic; Pe = 100 ≫ 1: advection-dominated transport."},
+{t:"Perfil estacionario en el aislamiento de una tubería de vapor",k:'layers',type:'num',unit:'°C',ans:42.5,tol:0.1,
+ es:"En un aislamiento de espesor L = 0,20 m, T_xx = 0 con T(0) = 80 °C y T(L) = 30 °C. Halle la temperatura en x = 0,15 m (umbral de contacto de referencia ≈ 43 °C).",
+ en:"In insulation of thickness L = 0.20 m, T_xx = 0 with T(0) = 80 °C and T(L) = 30 °C. Find the temperature at x = 0.15 m (reference contact threshold ≈ 43 °C).",
+ h:"Integre dos veces: T = c₁x + c₂. Con las fronteras, T(x) = 80 − 250x.",he:"Integrate twice: T = c₁x + c₂. With the boundaries, T(x) = 80 − 250x.",
+ x:"T(0,15) = 80 − 37,5 = 42,5 °C, justo en el umbral de contacto de ≈43 °C: se requiere inspección del aislamiento.",xe:"T(0.15) = 80 − 37.5 = 42.5 °C, right at the ≈43 °C contact threshold: insulation inspection is required."},
+{t:"Pulso de presión sonora en un ducto de compresor",k:'wave',type:'num',unit:'dB',ans:114,tol:0.5,
+ es:"Una válvula genera p(x,0) = 20·e^(−(x/0,5)²) Pa con p_t(x,0) = 0 y p_tt = c²·p_xx. Por d'Alembert el pulso se divide en dos ondas viajeras. Calcule el nivel de presión sonora (dB, p₀ = 2×10^-5 Pa) del pico que llega al operario.",
+ en:"A valve generates p(x,0) = 20·e^(−(x/0.5)²) Pa with p_t(x,0) = 0 and p_tt = c²·p_xx. By d'Alembert the pulse splits into two travelling waves. Compute the sound pressure level (dB, p₀ = 2×10^-5 Pa) of the peak reaching the worker.",
+ h:"Cada onda tiene la mitad de la amplitud: 10 Pa. Use NPS = 20·log10(p/p₀).",he:"Each wave has half the amplitude: 10 Pa. Use SPL = 20·log10(p/p₀).",
+ x:"NPS = 20·log10(10/2×10^-5) = 113,98 ≈ 114 dB, superior a la referencia de 85 dBA (Res. 1792/1990); evento impulsivo: evaluar con Leq y protección auditiva.",xe:"SPL = 20·log10(10/2×10^-5) = 113.98 ≈ 114 dB, above the 85 dBA reference (Res. 1792/1990); impulsive event: assess with Leq and hearing protection."},
+{t:"Tiempo de enfriamiento de una pieza forjada",k:'rod',type:'num',unit:'s',ans:183,tol:2,
+ es:"Barra de acero de L = 0,10 m con θ(x,0) = 175·sin(πx/L), θ = T − 25 y extremos a 25 °C; α = 1,2×10^-5 m²/s. Con θ(L/2,t) = 175·e^(−απ²t/L²), calcule el tiempo (s) para que el centro baje a 45 °C.",
+ en:"Steel bar of L = 0.10 m with θ(x,0) = 175·sin(πx/L), θ = T − 25 and ends at 25 °C; α = 1.2×10^-5 m²/s. With θ(L/2,t) = 175·e^(−απ²t/L²), compute the time (s) for the center to cool to 45 °C.",
+ h:"La constante απ²/L² vale 0,011844 s⁻¹ y θ = 20. Despeje t = ln(175/20)/0,011844.",he:"The constant απ²/L² is 0.011844 s⁻¹ and θ = 20. Solve t = ln(175/20)/0.011844.",
+ x:"t = 2,1691/0,011844 ≈ 183 s (≈ 3,05 min): esperar antes de manipular la pieza sin guantes térmicos.",xe:"t = 2.1691/0.011844 ≈ 183 s (≈ 3.05 min): wait before handling the piece without thermal gloves."},
+{t:"Transporte de un pulso de monóxido de carbono en un ducto",k:'pulse',type:'num',unit:'ppm',ans:68.2,tol:0.2,
+ es:"Tras una falla de un motor, el CO obedece C_t + v·C_x = 0 con v = 0,5 m/s y C(x,0) = 80·e^(−(x/5)²) ppm. Por el método de las características, calcule C en x = 12 m a t = 20 s (TLV-TWA de referencia: 25 ppm).",
+ en:"After an engine failure, CO obeys C_t + v·C_x = 0 with v = 0.5 m/s and C(x,0) = 80·e^(−(x/5)²) ppm. Using the method of characteristics, compute C at x = 12 m and t = 20 s (reference TLV-TWA: 25 ppm).",
+ h:"C(x,t) = f(x − vt). Aquí x − vt = 2 m.",he:"C(x,t) = f(x − vt). Here x − vt = 2 m.",
+ x:"C = 80·e^(−0,16) = 68,2 ppm, más de 2,7 veces el TLV-TWA: evacuar y usar protección respiratoria.",xe:"C = 80·e^(−0.16) = 68.2 ppm, over 2.7 times the TLV-TWA: evacuate and use respiratory protection."},
+{t:"Temperatura en el centro de un panel junto a un horno",k:'grid',type:'num',unit:'°C',ans:45,tol:0.1,
+ es:"Un panel cuadrado de 1 m × 1 m cumple T_xx + T_yy = 0. Un borde está a 90 °C (horno) y los otros tres a 30 °C. Calcule la temperatura en el centro (°C).",
+ en:"A 1 m × 1 m square panel satisfies T_xx + T_yy = 0. One edge is at 90 °C (furnace) and the other three at 30 °C. Compute the temperature at the center (°C).",
+ h:"Por simetría, el valor central es el promedio de las temperaturas de los cuatro bordes.",he:"By symmetry, the central value is the average of the four edge temperatures.",
+ x:"T = (90 + 30 + 30 + 30)/4 = 45 °C, sobre el umbral de ≈43 °C: señalizar y aislar.",xe:"T = (90 + 30 + 30 + 30)/4 = 45 °C, above the ≈43 °C threshold: mark and insulate."},
+{t:"Longitud de ventilación para reducir un contaminante",k:'decay',type:'num',unit:'m',ans:46.3,tol:0.3,
+ es:"En un túnel, D·C'' − v·C' − k·C = 0 con D = 0,05 m²/s, v = 0,4 m/s, k = 0,02 s^-1 y C(0) = 100 ppm, con solución acotada. Calcule la distancia (m) a la cual C baja a 10 ppm.",
+ en:"In a tunnel, D·C'' − v·C' − k·C = 0 with D = 0.05 m²/s, v = 0.4 m/s, k = 0.02 s^-1 and C(0) = 100 ppm, with a bounded solution. Compute the distance (m) at which C drops to 10 ppm.",
+ h:"La ecuación característica 0,05r² − 0,4r − 0,02 = 0 da r = −0,04969 m⁻¹ (la raíz acotada).",he:"The characteristic equation 0.05r² − 0.4r − 0.02 = 0 gives r = −0.04969 m⁻¹ (the bounded root).",
+ x:"x = ln(10)/0,04969 ≈ 46,3 m: ubicar puestos permanentes más allá o reforzar la extracción local.",xe:"x = ln(10)/0.04969 ≈ 46.3 m: place permanent stations beyond it or reinforce local extraction."},
+{t:"Resonancia acústica en un ducto cerrado de compresores",k:'tube',type:'mc',ans:1,
+ opts:["f₁ = 57,2 Hz","f₂ = 114,3 Hz","f₃ = 171,5 Hz","f₄ = 228,7 Hz"],
+ es:"En un ducto de L = 3 m con paredes rígidas (p_tt = c²·p_xx, p_x = 0 en los extremos, c = 343 m/s), f_n = n·c/(2L). Un compresor emite un tono de 115 Hz. ¿Qué frecuencia propia entra en resonancia?",
+ en:"In a duct of L = 3 m with rigid walls (p_tt = c²·p_xx, p_x = 0 at the ends, c = 343 m/s), f_n = n·c/(2L). A compressor emits a 115 Hz tone. Which natural frequency resonates?",
+ h:"c/(2L) = 343/6 = 57,17 Hz. Busque el múltiplo más cercano a 115 Hz.",he:"c/(2L) = 343/6 = 57.17 Hz. Find the multiple closest to 115 Hz.",
+ x:"f₂ = 114,33 Hz difiere solo 0,67 Hz (0,6 %) del tono: resonancia. Evitar puestos en los antinodos (x = 0; 1,5 y 3 m).",xe:"f₂ = 114.33 Hz differs only 0.67 Hz (0.6 %) from the tone: resonance. Avoid stations at the antinodes (x = 0, 1.5 and 3 m)."},
+{t:"Quemadura por contacto con una superficie caliente",k:'skin',type:'num',unit:'s',ans:0.042,tol:0.003,
+ es:"Un operario toca una tubería a 70 °C. La piel (T₀ = 33 °C, α = 1,1×10^-7 m²/s) sigue T = Ts + (T₀ − Ts)·erf(x/(2√(αt))). Calcule el tiempo (s) en que la capa basal (x = 0,1 mm) alcanza 44 °C, umbral de daño celular (accidente de trabajo, Ley 1562/2012).",
+ en:"A worker touches a pipe at 70 °C. The skin (T₀ = 33 °C, α = 1.1×10^-7 m²/s) follows T = Ts + (T₀ − Ts)·erf(x/(2√(αt))). Compute the time (s) at which the basal layer (x = 0.1 mm) reaches 44 °C, the cell damage threshold (work accident, Law 1562/2012).",
+ h:"erf(z) = 26/37 = 0,7027 → z ≈ 0,737. Luego t = x²/(4αz²).",he:"erf(z) = 26/37 = 0.7027 → z ≈ 0.737. Then t = x²/(4αz²).",
+ x:"t = 10^-8/(2,39×10^-7) ≈ 0,042 s, antes del reflejo de retirada: se requieren barreras, aislamiento y guantes.",xe:"t = 10^-8/(2.39×10^-7) ≈ 0.042 s, before the withdrawal reflex: barriers, insulation and gloves are required."}
+];
+const ICON=['🔥','🌫️','♨️','🔊','⚒️','☠️','🏭','🚇','🎛️','🩹'];
+/* Procedimiento de referencia por ejercicio (guía paso a paso, sin entregar el resultado final) */
+const PROC=[
+["Derive: T_t = −αk²·60·e^(−αk²t)·sin(kx) y T_xx = −60k²·e^(−αk²t)·sin(kx); compruebe que α·T_xx = T_t.","Calcule k = π/L = π/0,5 y luego αk² = 1,2×10^-5 · k².","Evalúe en x = 0,25 m (sin(π/2) = 1) y t = 0 (e⁰ = 1).","Resultado: T_t = −αk²·60."],
+["Identifique A (coeficiente de C_xx) = D, B (de C_xt) = 0 y C (de C_tt) = 0.","Calcule B² − 4AC: 0 → parabólica; negativo → elíptica; positivo → hiperbólica.","Calcule Pe = v·L/D = 0,5·10/0,05.","Elija la opción que combine ambos resultados."],
+["Integre T_xx = 0 dos veces: T(x) = c₁x + c₂.","Con T(0) = 80 obtenga c₂; con T(L) = 30 despeje c₁ = (30 − 80)/0,20.","Evalúe T(0,15) = 80 + c₁·0,15 y compare con el umbral de ≈43 °C."],
+["d'Alembert con velocidad inicial cero: p = ½[f(x−ct) + f(x+ct)]; cada onda viajera tiene amplitud ½·20 Pa.","Aplique NPS = 20·log10(p/p₀) con p₀ = 2×10^-5 Pa.","Calcule el cociente, su log10 y multiplique por 20."],
+["Defina θ = T − 25 y resuelva θ_t = α·θ_xx por separación de variables (modo n = 1).","Calcule la constante απ²/L² = 1,2×10^-5·π²/0,10².","En el centro sin(π/2) = 1: θ = 175·e^(−constante·t); fije θ = 45 − 25 = 20.","Despeje t = ln(175/20)/constante."],
+["Ecuación de primer orden: método de características, x − vt = constante.","Solución: C(x,t) = f(x − vt) = 80·e^(−((x−vt)/5)²).","Calcule x − vt = 12 − 0,5·20 y evalúe C."],
+["Por simetría de 90°, cada borde aporta Tᵢ/4 al centro (superposición).","Sume: T_centro = (T₁ + T₂ + T₃ + T₄)/4.","Reemplace 90, 30, 30 y 30 y calcule."],
+["Estacionario: 0,05·C'' − 0,4·C' − 0,02·C = 0 → ecuación característica 0,05r² − 0,4r − 0,02 = 0.","Resuelva r = [0,4 ± √(0,4² + 4·0,05·0,02)]/(2·0,05).","Descarte la raíz positiva (no acotada): C = 100·e^(r·x) con r negativa.","Imponga C = 10 y despeje x = ln(10)/|r|."],
+["Con p_x = 0 en los extremos la separación de variables da X_n = cos(nπx/L).","Frecuencia propia f_n = n·c/(2L) con c = 343 y L = 3.","Calcule f₁, f₂, f₃ y f₄ y compare con 115 Hz; elija la más cercana."],
+["Condición: (T − Ts)/(T₀ − Ts) = erf(z), con z = x/(2√(αt)).","Calcule erf(z) = (44 − 70)/(33 − 70).","Con la tabla (erf 0,70 = 0,6778; erf 0,75 = 0,7112) interpole z.","Despeje t = x²/(4·α·z²) con x = 1×10^-4 m y α = 1,1×10^-7 m²/s."]];
+const SYM=['7','8','9','4','5','6','1','2','3','0',',','.','π','α','θ','∂','²','³','√','±','×','÷','≈','=','+','−','(',')','/','^','e','ln(','log(','sin(','cos(','exp(','sqrt('];
+const TEMA="EDP APLICADAS A LA SEGURIDAD Y SALUD EN EL TRABAJO";
+let student='',t0=0,cur=0,screen='cover',lang='es',rate=1;const A=EX.map(()=>({v:null,chk:false,w:''}));
+const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const num=v=>parseFloat(String(v).replace(',','.'));
+function grade(i){const e=EX[i],v=A[i].v;if(v===null||v==='')return false;return e.type==='mc'?+v===e.ans:Math.abs(num(v)-e.ans)<=e.tol}
+/* ===== AUDIO (Web Speech API) con fallback ===== */
+const SP='speechSynthesis' in window;
+const hasV=l=>SP&&speechSynthesis.getVoices().some(v=>v.lang.toLowerCase().startsWith(l));
+function sub(t){const s=$('#sub');if(s)s.textContent=t||''}
+function say(t,l){sub(t);if(!SP)return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang=l==='es'?'es-ES':'en-US';const v=speechSynthesis.getVoices().find(v=>v.lang.toLowerCase().startsWith(l));if(v)u.voice=v;u.rate=rate;u.onend=()=>sub('');speechSynthesis.speak(u)}
+function refAudio(){['es','en'].forEach(l=>{const b=$('#a'+l);if(b){b.disabled=!hasV(l);b.title=b.disabled?'Voz no disponible / voice unavailable':''}})}
+if(SP)speechSynthesis.onvoiceschanged=refAudio;
+const audioBar=(tes,ten)=>SP?`<div><button id="aes" class="alt" onclick="say(${JSON.stringify(tes).replace(/"/g,'&quot;')},'es')">🇪🇸 Español</button><button id="aen" class="alt" onclick="say(${JSON.stringify(ten).replace(/"/g,'&quot;')},'en')">🇬🇧 English</button>
+<button class="alt" onclick="speechSynthesis.cancel();sub('')">⏹ Detener</button> Velocidad <select onchange="rate=+this.value"><option value=".8">0.8×</option><option value="1" selected>1×</option><option value="1.3">1.3×</option></select></div><div id="sub" aria-live="polite"></div>`:`<div id="sub">${esc(tes)}</div>`;
+/* ===== 3D (un solo renderer, dispose al cambiar de escena) ===== */
+let R,S,CAM,G,hov=0,burst=0,GL=true;
+try{R=new THREE.WebGLRenderer({canvas:$('#cv'),antialias:true,alpha:true});S=new THREE.Scene();CAM=new THREE.PerspectiveCamera(45,1.4,.1,50);CAM.position.set(0,1.5,7);
+S.add(new THREE.AmbientLight(0xffffff,.7));const dl=new THREE.DirectionalLight(0xffffff,.9);dl.position.set(3,5,4);S.add(dl);
+$('#cv').addEventListener('mousemove',()=>hov=1);$('#cv').addEventListener('mouseleave',()=>hov=0)}catch(e){GL=false}
+const col=(a,b,t)=>new THREE.Color(a).lerp(new THREE.Color(b),t);
+function build(k){const g=new THREE.Group(),mat=c=>new THREE.MeshStandardMaterial({color:c,metalness:.2,roughness:.5}),
+ add=(geo,c,x,y,z)=>{const m=new THREE.Mesh(geo,mat(c));m.position.set(x||0,y||0,z||0);g.add(m);return m},sp=()=>new THREE.SphereGeometry(.16,12,12);let u=()=>{};
+ if(k==='slab'){const m=add(new THREE.BoxGeometry(3.4,2.2,.6),0xE4572E);u=t=>m.material.color=col(0xE4572E,0x2E86DE,(Math.sin(t)+1)/2)} /* placa que se enfría */
+ else if(k==='flow'||k==='pulse'||k==='decay'){const a=[];for(let i=0;i<16;i++)a.push(add(sp(),0xF2B705));
+  u=t=>a.forEach((m,i)=>{const x=((i*.36+t*.8)%5.8)-2.9;m.position.set(x,Math.sin(i)*.4,0);const s=k==='pulse'?.3+2.2*Math.exp(-x*x/1.5):k==='decay'?2.4*Math.exp(-.35*(x+2.9)):1+Math.sin(x+t);m.scale.setScalar(Math.max(.2,s))})}
+ else if(k==='layers'){for(let i=0;i<5;i++)add(new THREE.BoxGeometry(3,.4,1.8),col(0xE4572E,0x2E86DE,i/4).getHex(),0,i*.45-.9,0);u=t=>{}}
+ else if(k==='wave'||k==='tube'){if(k==='tube'){const c=add(new THREE.CylinderGeometry(.9,.9,5.6,24,1,true),0x88aaff);c.rotation.z=Math.PI/2;c.material.transparent=true;c.material.opacity=.25;c.material.side=2}
+  const a=[];for(let i=0;i<28;i++)a.push(add(sp(),0xF2B705));u=t=>a.forEach((m,i)=>{const x=-2.7+i*.2;m.position.set(x,k==='wave'?Math.sin(x*2-t*3)*.9:Math.cos(2*Math.PI*(x+2.8)/5.6)*Math.cos(t*3)*.8,0)})}
+ else if(k==='rod'){const c=add(new THREE.CylinderGeometry(.5,.5,4,24),0xE4572E);c.rotation.z=Math.PI/2;u=t=>c.material.color=col(0xE4572E,0x2E86DE,(Math.sin(t*.8)+1)/2)}
+ else if(k==='grid'){const a=[];for(let i=0;i<7;i++)for(let j=0;j<7;j++){const m=add(new THREE.BoxGeometry(.5,.2,.5),0xF2B705,i*.55-1.65,0,j*.55-1.65);a.push([m,j])}
+  u=t=>a.forEach(([m,j])=>{const f=1-j/6;m.material.color=col(0x2E86DE,0xE4572E,f);m.scale.y=1+f*(2+Math.sin(t*2))})}
+ else if(k==='skin'){[0xF3C9A8,0xE0A67F,0xC98760].forEach((c,i)=>add(new THREE.BoxGeometry(3,.4,1.8),c,0,-i*.42,0));const h=add(new THREE.BoxGeometry(3,.25,1.8),0xE4572E,0,.9,0);u=t=>{h.position.y=.55+Math.abs(Math.sin(t))*.5}}
+ else if(k==='close'){const m=add(new THREE.IcosahedronGeometry(1.5,0),0xF2B705);u=t=>{m.rotation.x=t}}
+ else{const kn=add(new THREE.TorusKnotGeometry(.9,.28,100,14),0xF2B705),a=[];for(let i=0;i<24;i++)a.push(add(sp(),0x6FA8FF));const sl=add(new THREE.BoxGeometry(1.2,1.2,.3),0xE4572E,-2.4,-1.2,0);u=t=>{kn.rotation.x=t*.7;a.forEach((m,i)=>m.position.set(-2.8+i*.24,1.7+Math.sin(i*.5-t*3)*.4,0));sl.material.color=col(0xE4572E,0x2E86DE,(Math.sin(t)+1)/2)}} /* bienvenida: nudo toroidal = EDP/ondas */
+ g.userData.u=u;return g}
+function setScene(k){if(!GL)return;if(G){S.remove(G);G.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material)o.material.dispose()})}G=build(k);S.add(G)}
+function mount(k){const f=$('#fig');if(!f)return;if(!GL){f.innerHTML='<svg viewBox="0 0 120 80" width="60%"><circle cx="60" cy="40" r="28" fill="#F2B705"/><path d="M10 40q12-25 25 0t25 0 25 0 25 0" stroke="#0B3D91" stroke-width="4" fill="none"/></svg>';return}
+ f.appendChild($('#cv'));const w=f.clientWidth,h=f.clientHeight;R.setSize(w,h,false);CAM.aspect=w/h;CAM.updateProjectionMatrix();setScene(k)}
+const clk=GL?new THREE.Clock():null;
+(function loop(){requestAnimationFrame(loop);if(!GL||!G)return;const t=clk.getElapsedTime();G.userData.u(t);G.rotation.y=Math.sin(t*.4)*.6+(hov?.3:0);burst*=.95;G.scale.setScalar(1+burst*.3);R.render(S,CAM)})();
+/* ===== PANTALLAS ===== */
+const hdr=()=>`<header><b>Ecuaciones Diferenciales · Universidad Americana</b><span>${student?'Estudiante: '+esc(student):''}</span><span id="tm"></span></header>`;
+setInterval(()=>{const e=$('#tm');if(e&&t0){const s=Math.floor((Date.now()-t0)/1e3);e.textContent='⏱ '+String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}},500);
+function go(s,i){if(SP)speechSynthesis.cancel();screen=s;if(i!==undefined)cur=i;draw()}
+function draw(){const a=$('#app');
+ if(screen==='cover'){a.innerHTML=hdr()+`<div class="card cover"><h1>EJERCICIOS DE ECUACIONES DIFERENCIALES PARCIALES: ${TEMA}</h1><div><span class="meta">DOCENTE: NICOLAS BILBAO</span><span class="meta">SEMANA: 5</span><span class="meta">TEMA: ECUACIONES DIFERENCIALES PARCIALES</span></div><div class="ill"><span>🌡️</span><span>🔊</span><span>🏭</span><span>⛑️</span><span>🔥</span><span>🌫️</span></div><h3>Materia: Ecuaciones Diferenciales</h3><h3>Programa: Ingeniería en Seguridad y Salud en el Trabajo</h3><h3>Institución: Universidad Americana</h3><div id="fig"></div><br><button onclick="go('name')">Comenzar simulación</button></div>`;mount('welcome')}
+ else if(screen==='name'){a.innerHTML=hdr()+`<div class="card"><h2>Datos del estudiante</h2><label>Nombre completo<br><input id="nm" type="text" value="${esc(student)}" autocomplete="name"></label><p id="er" style="color:var(--ro)"></p><button onclick="conf()">Continuar</button><div id="fig" style="margin-top:12px"></div></div>`;mount('welcome');$('#nm').onkeydown=e=>{if(e.key==='Enter')conf()}}
+ else if(screen==='ex')drawEx();else drawEnd()}
+function conf(){const v=$('#nm').value.trim();if(!v||!/[A-Za-zÁ-ÿ]/.test(v)){$('#er').textContent='Ingrese su nombre completo (no solo números).';return}
+ const first=!t0;student=v;if(first){t0=Date.now();say('Bienvenido/a ingeniero/a, '+v,'es')}go('ex',0)}
+function drawEx(){const e=EX[cur],s=A[cur];let inp;
+ if(e.type==='mc')inp=e.opts.map((o,i)=>`<label class="opt"><input type="radio" name="o" value="${i}" ${s.v!==null&&+s.v===i?'checked':''} onchange="A[cur].v=this.value"> ${esc(o)}</label>`).join('');
+ else inp=`<b>Respuesta final:</b> <input id="in" type="number" step="any" placeholder="Valor numérico" value="${s.v??''}" oninput="A[cur].v=this.value" style="max-width:200px"> ${e.unit}`;
+ const ins=e.type==='mc'?'Seleccione la opción correcta':`Escriba la respuesta final en ${e.unit}`;
+ $('#app').innerHTML=hdr()+`<div class="card"><div class="bar"><i style="width:${(cur+1)*10}%"></i></div><small>Ejercicio ${cur+1} de 10</small><div class="grid"><div><h2><span class="ico">${ICON[cur]}</span> Ejercicio ${cur+1}: ${esc(e.t)}</h2>
+ <div class="ins"><b>Instrucciones:</b> 1) Lea el enunciado y anote los datos. 2) Si lo necesita, abra la <i>Pista</i> o el <i>Procedimiento</i>. 3) Desarrolle el ejercicio en el espacio de trabajo usando los símbolos y números. 4) ${ins} y pulse <i>Comprobar</i>.</div>
+ <p>${esc(e.es)}</p>${inp}<div><button onclick="chk()">Comprobar</button><button class="alt" onclick="tg('hn')">💡 Pista</button><button class="alt" onclick="tg('pr')">📋 Procedimiento</button></div><div class="hint" id="hn">💡 ${esc(e.h)}</div><ol class="proc" id="pr">${PROC[cur].map(x=>`<li>${esc(x)}</li>`).join('')}</ol><div class="fb" id="fb"></div>${audioBar(e.es,e.en)}</div><div id="fig"></div></div>
+ <h3>✏️ Espacio de trabajo (símbolos y números)</h3><div>${SYM.map(t=>`<button class="k" onclick="ins('${t}')">${t}</button>`).join('')}</div>
+ <textarea id="wk" placeholder="Escriba aquí su procedimiento. Ej.: k = 2*π  →  αk² = 1,2e-5 ..." oninput="A[cur].w=this.value">${esc(s.w)}</textarea>
+ <div><button class="alt" onclick="calc()">＝ Calcular (selección o última línea)</button><button class="alt" onclick="$('#wk').value='';A[cur].w=''">Borrar</button> <small>Use * entre factores (2*π). Exponentes con ^ o ².</small></div>
+ <div style="margin-top:10px"><button ${cur?'':'disabled'} onclick="go('ex',cur-1)">← Anterior</button><button onclick="go(${cur<9?"'ex',cur+1":"'end'"})">${cur<9?'Siguiente →':'Finalizar y ver resumen'}</button></div></div>`;
+ mount(e.k);refAudio();if(s.chk)showFb(false)}
+const tg=id=>{const x=$('#'+id);x.style.display=x.style.display==='block'?'none':'block'};
+function ins(t){const w=$('#wk');w.setRangeText(t,w.selectionStart,w.selectionEnd,'end');w.focus();A[cur].w=w.value}
+function calc(){const w=$('#wk');let t=w.value.slice(w.selectionStart,w.selectionEnd)||w.value.split('\n').pop();
+ let x=t.replace(/−/g,'-').replace(/×/g,'*').replace(/÷/g,'/').replace(/\^/g,'**').replace(/²/g,'**2').replace(/³/g,'**3').replace(/π/g,'Math.PI').replace(/(\d),(\d)/g,'$1.$2').replace(/\b(sqrt|sin|cos|exp)\(/g,'Math.$1(').replace(/\bln\(/g,'Math.log(').replace(/\blog\(/g,'Math.log10(').replace(/√\(/g,'Math.sqrt(').replace(/\be\b/g,'Math.E');
+ if(x.includes('='))x=x.split('=').pop();const c=x.replace(/Math\.(PI|E|sqrt|sin|cos|exp|log10|log)/g,'');
+ try{if(!x.trim()||!/^[0-9+\-*/().\s]*$/.test(c))throw 0;const r=Function('"use strict";return ('+x+')')();if(!isFinite(r))throw 0;w.value+=(w.value.endsWith('\n')||!w.value?'':' ')+'= '+(+r.toPrecision(7));}catch(_){alert('No se pudo calcular. Use * entre factores, p. ej. 2*π.')}
+ A[cur].w=w.value}
+function chk(){const s=A[cur];if(s.v===null||s.v===''){$('#fb').className='fb bad';$('#fb').textContent='Ingrese una respuesta primero.';return}s.chk=true;showFb(true)}
+function showFb(speak){const e=EX[cur],ok=grade(cur),f=$('#fb');f.className='fb '+(ok?'ok':'bad');
+ f.innerHTML=(ok?'✅ <b>Correcto.</b> ':'❌ <b>Incorrecto.</b> ')+esc(e.x);if(ok&&speak)burst=1;
+ if(speak)say((ok?'Correcto. ':'Incorrecto. ')+e.x,'es')}
+function drawEnd(){const ok=EX.filter((_,i)=>grade(i)).length,un=A.filter(x=>x.v===null||x.v==='').length,sc=(ok*10).toFixed(2),secs=Math.floor((Date.now()-t0)/1e3);
+ $('#app').innerHTML=hdr()+`<div class="card"><h2>Resumen de resultados</h2><div class="grid"><div><h1 style="color:var(--ve)">${sc} / 100</h1><p>Aciertos: <b>${ok}</b> · Errores: <b>${10-ok-un}</b> · Sin responder: <b>${un}</b> · Revisión manual: 0</p><p>Tiempo: ${Math.floor(secs/60)} min ${secs%60} s</p><table>${EX.map((e,i)=>`<tr><td>${i+1}. ${esc(e.t)}</td><td>${grade(i)?'✅':'❌'}</td></tr>`).join('')}</table><button onclick="pdf()">📄 Descargar PDF</button><button onclick="exportHtml()">🌐 Descargar HTML con mis datos</button><button class="alt" onclick="pdf();exportHtml()">Descargar ambos</button><button class="alt" onclick="go('ex',0)">Revisar ejercicios</button></div><div id="fig"></div></div></div>`;mount('close');
+ say(`Simulación finalizada, ingeniero/a ${student}. Puntaje: ${sc} sobre 100.`,'es')}
+/* ===== PDF (jsPDF, client-side). Se sustituyen símbolos fuera de Latin-1 ===== */
+const MAP={'−':'-','≈':'~','π':'pi','α':'alfa','θ':'theta','√':'raiz','·':'*','≫':'>>','₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','⁻¹':'^-1','✅':'','❌':'','→':'->','←':'<-','≤':'<=','²':'^2','°':' deg','∂':'d','±':'+/-','÷':'/','≠':'!=','³':'^3','Δ':'Delta'};
+const san=t=>String(t).replace(/[−≈π√·≫₀₁₂₃₄→←≤θα²°∂±÷≠³Δ]|⁻¹/g,m=>MAP[m]||'');
+function pdf(){const {jsPDF}=window.jspdf,d=new jsPDF();let y=16;const L=(t,b,sz)=>{d.setFont('helvetica',b?'bold':'normal');d.setFontSize(sz||10);d.splitTextToSize(san(t),180).forEach(l=>{if(y>282){d.addPage();y=16}d.text(l,15,y);y+=5.2})};
+ const ok=EX.filter((_,i)=>grade(i)).length;L('Simulador: Ecuaciones Diferenciales Parciales aplicadas a la SST',1,14);L('Universidad Americana - Ingenieria en Seguridad y Salud en el Trabajo');
+ L('DOCENTE: NICOLAS BILBAO   |   SEMANA: 5   |   TEMA: ECUACIONES DIFERENCIALES PARCIALES');
+ L('Estudiante: '+student);L('Fecha: '+new Date().toLocaleString('es-CO'));L('Puntaje final: '+(ok*10).toFixed(2)+' / 100 ('+ok+' aciertos)',1,12);y+=3;
+ EX.forEach((e,i)=>{const v=A[i].v,r=e.type==='mc'?(v===null?'Sin responder':e.opts[v]):(v===null||v===''?'Sin responder':v+' '+e.unit);
+  L((i+1)+'. '+e.t,1,11);L('Enunciado: '+e.es);L('Procedimiento de referencia:',1);PROC[i].forEach((p,j)=>L('  '+(j+1)+') '+p));L('Trabajo del estudiante: '+(A[i].w||'(sin desarrollo)'));
+  L('Respuesta dada: '+r+'  ->  '+(grade(i)?'CORRECTA':'INCORRECTA'));L('Resultado esperado: '+(e.type==='mc'?e.opts[e.ans]:e.ans+' '+e.unit));L('Interpretacion: '+e.x);y+=3});
+ d.save('resultados_EDP_SST_'+san(student).replace(/\s+/g,'_')+'.pdf')}
+function exportHtml(){const ok=EX.filter((_,i)=>grade(i)).length,q=esc;
+ const body=EX.map((e,i)=>{const v=A[i].v,r=e.type==='mc'?(v===null?'Sin responder':e.opts[v]):(v===null||v===''?'Sin responder':v+' '+e.unit);
+  return `<div class="c"><h3>${i+1}. ${q(e.t)}</h3><p><b>Enunciado:</b> ${q(e.es)}</p><p><b>Procedimiento de referencia:</b></p><ol>${PROC[i].map(p=>`<li>${q(p)}</li>`).join('')}</ol><p><b>Trabajo del estudiante:</b></p><pre>${q(A[i].w||'(sin desarrollo)')}</pre><p><b>Respuesta dada:</b> ${q(r)} — <b class="${grade(i)?'ok':'no'}">${grade(i)?'CORRECTA':'INCORRECTA'}</b></p><p><b>Resultado esperado:</b> ${q(e.type==='mc'?e.opts[e.ans]:e.ans+' '+e.unit)}</p><p><b>Interpretación:</b> ${q(e.x)}</p></div>`}).join('');
+ const h=`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Resultados - ${q(student)}</title><style>body{font-family:Arial,sans-serif;max-width:900px;margin:20px auto;padding:0 12px}h1{color:#0B3D91}.c{border:1px solid #ccc;border-left:6px solid #F2B705;padding:8px 14px;margin:12px 0;border-radius:6px}.ok{color:#1B7F3B}.no{color:#C62828}pre{background:#f4f4f4;padding:8px;white-space:pre-wrap}</style></head><body><h1>Ecuaciones Diferenciales Parciales aplicadas a la SST</h1><p>Universidad Americana · Ingeniería en Seguridad y Salud en el Trabajo<br><b>DOCENTE:</b> NICOLAS BILBAO · <b>SEMANA:</b> 5 · <b>TEMA:</b> ECUACIONES DIFERENCIALES PARCIALES</p><p><b>Estudiante:</b> ${q(student)}<br><b>Fecha:</b> ${new Date().toLocaleString('es-CO')}<br><b>Puntaje final:</b> ${(ok*10).toFixed(2)} / 100 (${ok} aciertos de 10)</p>${body}</body></html>`;
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([h],{type:'text/html'}));a.download='resultados_EDP_SST_'+student.replace(/\s+/g,'_')+'.html';a.click()}
+draw();
+</script></body></html>
